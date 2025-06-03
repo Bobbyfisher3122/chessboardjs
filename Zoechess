@@ -1,0 +1,69 @@
+// server/index.js
+const WebSocket = require('ws');
+const http = require('http');
+const express = require('express');
+const { Chess } = require('chess.js');
+
+const app = express();
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+
+let waitingPlayer = null;
+const games = new Map();
+
+wss.on('connection', (ws) => {
+  ws.on('message', (message) => {
+    const data = JSON.parse(message);
+    if (data.type === 'join') {
+      ws.username = data.username;
+      if (waitingPlayer) {
+        const gameId = Date.now().toString();
+        const chess = new Chess();
+
+        const game = {
+          id: gameId,
+          white: waitingPlayer,
+          black: ws,
+          chess,
+        };
+
+        games.set(gameId, game);
+        waitingPlayer.send(JSON.stringify({ type: 'start', color: 'white', gameId }));
+        ws.send(JSON.stringify({ type: 'start', color: 'black', gameId }));
+
+        waitingPlayer = null;
+      } else {
+        waitingPlayer = ws;
+      }
+    } else if (data.type === 'move') {
+      const game = games.get(data.gameId);
+      if (!game) return;
+
+      const move = game.chess.move(data.move);
+      if (move) {
+        game.white.send(JSON.stringify({ type: 'move', move }));
+        game.black.send(JSON.stringify({ type: 'move', move }));
+
+        if (game.chess.game_over()) {
+          let winner;
+          if (game.chess.in_checkmate()) {
+            winner = data.from;
+          } else {
+            winner = 'draw';
+          }
+
+          game.white.send(JSON.stringify({ type: 'game_over', winner }));
+          game.black.send(JSON.stringify({ type: 'game_over', winner }));
+        }
+      }
+    }
+  });
+
+  ws.on('close', () => {
+    if (waitingPlayer === ws) waitingPlayer = null;
+  });
+});
+
+server.listen(8080, () => {
+  console.log('Server running on http://localhost:8080');
+});
